@@ -20,7 +20,12 @@ namespace Dots
         {
             InitializeComponent();
             this.SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
-            this.engine = new Engine(10, this.ClientRectangle.Width, this.ClientRectangle.Height);
+        }
+
+        private void InitializeEngine()
+        {
+            if (this.engine != null) this.engine.Stop();
+            this.engine = new Engine(1000, this.ClientRectangle.Width, this.ClientRectangle.Height);
             this.engine.Start();
         }
 
@@ -28,9 +33,7 @@ namespace Dots
         {
             base.OnResizeEnd(e);
             this.InitializeCanvas();
-            if (this.engine != null) this.engine.Stop();
-            this.engine = new Engine(10, this.ClientRectangle.Width, this.ClientRectangle.Height);
-            this.engine.Start();
+            this.InitializeEngine();
         }
 
         private void InitializeCanvas()
@@ -43,19 +46,17 @@ namespace Dots
         {
             base.OnPaint(e);
             if (this.canvas == null) this.InitializeCanvas();
+            if (this.engine == null) this.InitializeEngine();
 
-            if (this.engine != null)
+            using (var render = Graphics.FromImage(this.canvas))
             {
-                using (var render = Graphics.FromImage(this.canvas))
+                using (var brush = new SolidBrush(Color.Black))
                 {
-                    using (var brush = new SolidBrush(Color.Black))
+                    var changes = this.engine.GetRenderChanges();
+                    foreach (var change in changes)
                     {
-                        var changes = this.engine.GetRenderChanges();
-                        foreach (var change in changes)
-                        {
-                            brush.Color = this.GetColor(change.Value);
-                            render.FillRectangle(brush, new Rectangle(change.Key.X, change.Key.Y, 1, 1));
-                        }
+                        brush.Color = this.GetColor(change.Value);
+                        render.FillRectangle(brush, new Rectangle(change.Key.X, change.Key.Y, 2, 2));
                     }
                 }
             }

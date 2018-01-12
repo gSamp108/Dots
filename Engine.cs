@@ -51,6 +51,10 @@ namespace Dots
         {
             public Position Position { get; set; }
             public int Owner { get; set; }
+            public int Hits { get; set; }
+            public int Resources { get; set; }
+            public int Tier { get; set; }
+            public int Disappointment { get; set; }
         }
 
         private object ThreadLock = new object();
@@ -105,11 +109,26 @@ namespace Dots
 
         private void MoveDotTo(Dot dot, Position position)
         {
+            dot.Position = position;
             if (!this.OwnerByPosition.ContainsKey(position)) this.OwnerByPosition.Add(position, 0);
-            this.OwnerByPosition[position] = dot.Owner;
+            if (this.OwnerByPosition[position] != dot.Owner)
+            {
+                this.OwnerByPosition[position] = dot.Owner;
+
+                dot.Resources += 1;
+                if (dot.Resources >= (dot.Tier * 10))
+                {
+                    dot.Resources -= (dot.Tier * 10);
+                    dot.Tier += 1;
+                    dot.Hits += (dot.Tier * 10);
+                    dot.Disappointment -= (dot.Tier * 10);
+                    if (dot.Disappointment < 0) dot.Disappointment = 0;
+                }
+
+
+            }
             if (!this.ChangesSinceLastRender.ContainsKey(position)) this.ChangesSinceLastRender.Add(position, 0);
             this.ChangesSinceLastRender[position] = dot.Owner;
-            dot.Position = position;
         }
 
         public void Stop()
