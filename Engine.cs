@@ -85,17 +85,21 @@ namespace Dots
             public DotTypes Type { get; set; }
 
             public int Tier { get; set; }
+            public int TierProgress { get; set; }
+            public int TierProgressRequired { get { return this.Tier * Engine.TierProgressCost; } }
             public int Hits { get; set; }
-            public int MaxHits { get { return this.Tier * 10; } }
+            public int MaxHits { get { return this.Tier * Engine.BaseHitsPerTier; } }
+            public int StoredResources { get; set; }
+            public Dot UnitStorage { get; set; }
+
             public int ControlRange
             {
                 get
                 {
-                    if (this.Type == DotTypes.City) return 2;
-                    else return 1;
+                    if (this.Type == DotTypes.City) return Engine.BaseCityControlRange;
+                    else return Engine.BaseUnitControlRange;
                 }
             }
-            public int StoredResources { get; set; }
 
             public Dot(Engine engine, Empire empire, DotTypes type)
             {
@@ -111,18 +115,17 @@ namespace Dots
         {
             public Engine Engine { get; set; }
             public int Id { get; set; }
-            public int Resources { get; set; }
             public HashSet<Dot> Dots { get; set; }
             public HashSet<Tile> Tiles { get; set; }
 
             public int LastResourceIncome { get; set; }
             public int CurrentResourceIncome { get; set; }
-            
+            public int CurrentResourceStorage { get; set; }
+   
             public Empire(Engine engine, int id)
             {
                 this.Engine = engine;
                 this.Id = id;
-                this.Resources = 0;
                 this.Dots = new HashSet<Dot>();
                 this.Tiles = new HashSet<Tile>();
             }
@@ -166,6 +169,13 @@ namespace Dots
         private int MapHeight;
         private Random Rng;
         private Dictionary<Tile, TileRenderer> Renderer;
+
+        public const int UnitResourceCost = 10;
+        public const int CityResourceCost = 10;
+        public const int TierProgressCost = 10;
+        public const int BaseHitsPerTier = 10;
+        public const int BaseCityControlRange = 2;
+        public const int BaseUnitControlRange = 1;
 
         public bool IsEngineRunning
         {
@@ -344,27 +354,41 @@ namespace Dots
         private void TakeTurn(Empire empire)
         {
             this.GenerateResources(empire);
-            foreach (var dot in empire.Dots)
+            this.ManageProduction(empire);
+            this.MoveUnits(empire);
+            this.EmptyStorage(empire);
+        }
+
+        private void EmptyStorage(Empire empire)
+        {
+
+        }
+        private void MoveUnits(Empire empire)
+        {
+            var units = empire.Dots.Where(o => o.Type == DotTypes.Unit);
+            foreach (var unit in units)
             {
-                this.TakeTurn(dot);
+                var nearbyTiles = unit.Tile.Position.Nearby.Select(o => this.GetTileAt(o));
+                var emptyTiles = nearbyTiles.Where(o => o.Occupant == null);
+
             }
         }
-        private void TakeTurn(Dot dot)
+        private void ManageProduction(Empire empire)
         {
+            var citiesWithoutUnitInStorage = empire.Dots.Where(o => o.Type == DotTypes.City && o.UnitStorage == null).ToList();
+            while (empire.CurrentResourceStorage >= Engine.UnitResourceCost && citiesWithoutUnitInStorage.Count > 0)
+            {
+                var city = citiesWithoutUnitInStorage[this.Rng.Next(citiesWithoutUnitInStorage.Count)];
+                citiesWithoutUnitInStorage.Remove(city);
+                empire.CurrentResourceStorage -= Engine.UnitResourceCost;
+                city.UnitStorage = new Dot(this, empire, DotTypes.Unit);
+            }            
         }
         private void GenerateResources(Empire empire)
         {
             empire.LastResourceIncome = empire.CurrentResourceIncome;
             empire.CurrentResourceIncome = empire.Tiles.Count;
-            if (empire.Dots.Count > 0)
-            {
-                var dotList = empire.Dots.ToList();
-                for (int i = 0; i < empire.CurrentResourceIncome; i++)
-                {
-                    var dot = dotList[this.Rng.Next(dotList.Count)];
-                    dot.StoredResources += 1;
-                }
-            }
+            empire.CurrentResourceStorage += empire.CurrentResourceIncome;
         }
 
         public void Stop()
