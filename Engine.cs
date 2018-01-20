@@ -80,7 +80,7 @@ namespace Dots
         public sealed class Dot
         {
             public Engine Engine { get; set; }
-            public Position Position { get; set; }
+            public Tile Tile { get; set; }
             public Empire Empire { get; set; }
             public DotTypes Type { get; set; }
 
@@ -95,12 +95,12 @@ namespace Dots
                     else return 1;
                 }
             }
+            public int StoredResources { get; set; }
 
-            public Dot(Engine engine, Empire empire, Position position, DotTypes type)
+            public Dot(Engine engine, Empire empire, DotTypes type)
             {
                 this.Engine = engine;
                 this.Empire = empire;
-                this.Position = position;
                 this.Type = type;
                 this.Tier = 1;
                 this.Hits = this.MaxHits;
@@ -113,37 +113,66 @@ namespace Dots
             public int Id { get; set; }
             public int Resources { get; set; }
             public HashSet<Dot> Dots { get; set; }
-            public HashSet<Position> Tiles { get; set; }
+            public HashSet<Tile> Tiles { get; set; }
 
+            public int LastResourceIncome { get; set; }
+            public int CurrentResourceIncome { get; set; }
+            
             public Empire(Engine engine, int id)
             {
                 this.Engine = engine;
                 this.Id = id;
                 this.Resources = 0;
                 this.Dots = new HashSet<Dot>();
-                this.Tiles = new HashSet<Position>();
+                this.Tiles = new HashSet<Tile>();
             }
-
         }
 
-        private object ThreadLock = new object();
-        private Dictionary<Position, int> ChangesSinceLastRender;
+        public sealed class Tile
+        {
+            public Engine Engine { get; set; }
+            public Position Position { get; set; }
+            public Empire Owner { get; set; }
+            public HashSet<Dot> Claimants { get; set; }
+            public Dot Occupant { get; set; }
+
+            public Tile(Engine engine, Position position)
+            {
+                this.Engine = engine;
+                this.Position = position;
+                this.Claimants = new HashSet<Dot>();
+            }
+        }
+
+        public sealed class TileRenderer
+        {
+            public Position Position { get; set; }
+            public int Owner { get; set; }
+            public int Dot { get; set; }
+
+            public TileRenderer(Position position)
+            {
+                this.Position = position;
+            }
+        }
+
+        private object ThreadKey = new object();
+        private bool StopRequested;
+        private bool isEngineRunning;
         private HashSet<Dot> Dots;
         private HashSet<Empire> Empires;
+        private Dictionary<Position, Tile> Tiles;
         private int MapWidth;
         private int MapHeight;
         private Random Rng;
-        private bool StopRequested;
-        private bool isEngineRunning;
-        private Dictionary<Position, Empire> ClaimByPosition;
-        private Dictionary<Position, HashSet<Dot>> ClaimantsByPosition;
+        private Dictionary<Tile, TileRenderer> Renderer;
 
         public bool IsEngineRunning
         {
             get
             {
                 var result = false;
-                lock (this.ThreadLock)
+                lock (this.ThreadKey)
                 {
                     result = this.isEngineRunning;
                 }
@@ -153,7 +182,7 @@ namespace Dots
 
         public Engine(int startingCount, int mapWidth, int mapHeight)
         {
-            lock (this.ThreadLock)
+            lock (this.ThreadKey)
             {
                 this.Initialize(mapWidth, mapHeight);
                 this.SpawnInitialEmpires(startingCount);
@@ -167,7 +196,9 @@ namespace Dots
             {
                 for (int y = 0; y < this.MapWidth; y++)
                 {
-                    spawnPoints.Add(new Position(x, y));
+                    var position = new Position(x,y);
+                    spawnPoints.Add(position);
+                    this.Tiles.Add(position, new Tile(this, position));
                 }
             }
 
@@ -182,141 +213,163 @@ namespace Dots
 
                 var empire = new Empire(this, i + 1);
                 this.AddEmpire(empire);
-                var dot = new Dot(this, empire, spawnPoint, DotTypes.City);
-                this.AddDot(dot);
+                this.AddDot(empire, this.GetTileAt(spawnPoint), DotTypes.City);
             }
+        }
+        private void AddDot(Empire empire, Tile tile, DotTypes type)
+        {
+            var dot = new Dot(this, empire, type);            
+            this.Dots.Add(dot);
+            empire.Dots.Add(dot);
+            this.MoveDotTo(dot, tile);
         }
         private void Initialize(int mapWidth, int mapHeight)
         {
-            this.ChangesSinceLastRender = new Dictionary<Position, int>();
             this.Dots = new HashSet<Dot>();
             this.Empires = new HashSet<Empire>();
+            this.Tiles = new Dictionary<Position, Tile>();
             this.MapHeight = mapHeight;
             this.MapWidth = mapWidth;
             this.Rng = new Random();
-            this.ClaimantsByPosition = new Dictionary<Position, HashSet<Dot>>();
-            this.ClaimByPosition = new Dictionary<Position, Empire>();
+            this.Renderer = new Dictionary<Tile, TileRenderer>();
         }
-        private void AddDot(Dot dot)
+        private Tile GetTileAt(Position position)
         {
-            this.Dots.Add(dot);
-            dot.Empire.Dots.Add(dot);
-            this.MoveDotTo(dot, dot.Position);
+            var x = position.X;
+            var y = position.Y;
+            while (x < 0) { x += this.MapWidth; }
+            while (y < 0) { y += this.MapHeight; }
+            while (x >= this.MapWidth) { x -= this.MapWidth; }
+            while (y >= this.MapHeight) { y -= this.MapHeight; }
+            return this.Tiles[new Position(x, y)];
         }
         private void AddEmpire(Empire empire)
         {
             this.Empires.Add(empire);
         }
-        private void MoveDotTo(Dot dot, Position position)
+        private void MoveDotTo(Dot dot, Tile tile)
         {
-            this.RemoveDotFrom(dot, dot.Position);
-
-            dot.Position = position;
-            foreach (var tile in position.Inrange(dot.ControlRange))
+            this.RemoveDotFromCurrentTile(dot);
+            this.AddDotToTile(dot, tile);
+        }
+        private void AddDotToTile(Dot dot, Tile tile)
+        {
+            dot.Tile = tile;
+            tile.Occupant = dot;
+            this.InitializeTileRenderer(tile);
+            this.Renderer[tile].Dot = dot.Empire.Id;
+            foreach (var position in tile.Position.Inrange(dot.ControlRange))
             {
-                this.ClaimTile(tile, dot);
+                var nearbyTile = this.GetTileAt(position);
+                this.ClaimTile(nearbyTile, dot);
             }
-
-            if (!this.OwnerByPosition.ContainsKey(position)) this.OwnerByPosition.Add(position, 0);
-            if (this.OwnerByPosition[position] != dot.Empire)
+        }
+        private void RemoveDotFromCurrentTile(Dot dot)
+        {
+            if (dot.Tile != null)
             {
-                this.OwnerByPosition[position] = dot.Empire;
-
-                dot.Resources += 1;
-                if (dot.Resources >= (dot.Tier * 10))
+                foreach (var position in dot.Tile.Position.Inrange(dot.ControlRange))
                 {
-                    dot.Resources -= (dot.Tier * 10);
-                    dot.Tier += 1;
-                    dot.Hits += (dot.Tier * 10);
-                    dot.Disappointment -= (dot.Tier * 10);
-                    if (dot.Disappointment < 0) dot.Disappointment = 0;
+                    var tile = this.GetTileAt(position);
+                    this.RemoveTileClaim(tile, dot);
                 }
-
-
+                dot.Tile.Occupant = null;
+                this.InitializeTileRenderer(dot.Tile);
+                this.Renderer[dot.Tile].Dot = 0;
             }
-            if (!this.ChangesSinceLastRender.ContainsKey(position)) this.ChangesSinceLastRender.Add(position, 0);
-            this.ChangesSinceLastRender[position] = dot.Empire;
         }
 
-        private void RemoveDotFrom(Dot dot, Position position)
+        private void InitializeTileRenderer(Tile tile)
         {
-            foreach (var tile in dot.Position.Inrange(dot.ControlRange))
+            if (!this.Renderer.ContainsKey(tile))
             {
-                this.RemoveTileClaim(tile, dot);
+                this.Renderer.Add(tile, new TileRenderer(tile.Position));
+                this.Renderer[tile].Owner = (tile.Owner != null ? tile.Owner.Id : 0);
+                this.Renderer[tile].Dot = (tile.Occupant != null ? tile.Occupant.Empire.Id : 0);
+            }            
+        }
+        private void RemoveTileClaim(Tile tile, Dot dot)
+        {
+            tile.Claimants.Remove(dot);
+            this.ResolveTileClaim(tile);
+        }
+        private void ResolveTileClaim(Tile tile)
+        {
+            var remainingClaimingEmpires = tile.Claimants.Select(o => o.Empire).Distinct();
+            if (remainingClaimingEmpires.Count() > 0)
+            {
+                if (!remainingClaimingEmpires.Contains(tile.Owner))
+                {
+                    if (tile.Owner != null) tile.Owner.Tiles.Remove(tile);
+                    tile.Owner = null;
+                    this.InitializeTileRenderer(tile);
+                    this.Renderer[tile].Owner = 0;
+                }
+                if (tile.Owner == null && remainingClaimingEmpires.Count() == 1)
+                {
+                    tile.Owner = remainingClaimingEmpires.First();
+                    tile.Owner.Tiles.Add(tile);
+                    this.InitializeTileRenderer(tile);
+                    this.Renderer[tile].Owner = tile.Owner.Id;
+                }
             }
+        }
+        private void ClaimTile(Tile tile, Dot dot)
+        {
+            tile.Claimants.Add(dot);
+            this.ResolveTileClaim(tile);
         }
 
-        private void RemoveTileClaim(Position tile, Dot dot)
-        {
-            if (!this.ClaimantsByPosition.ContainsKey(tile)) this.ClaimantsByPosition.Add(tile, new HashSet<Dot>());
-            this.ClaimantsByPosition[tile].Remove(dot);
-            if (!this.ClaimByPosition.ContainsKey(tile)) this.ClaimByPosition.Add(tile, null);
-            var claimants = this.ClaimantsByPosition[tile].Select(o => o.Empire).Distinct();
-            if (this.ClaimByPosition[tile] != null)
-            {
-
-            }
-            else
-            {
-            }
-        }
-
-        private void ClaimTile(Position tile, Dot dot)
-        {
-            throw new NotImplementedException();
-        }
-        private bool InBounds(Position position)
-        {
-            var result = true;
-            lock (this.ThreadLock)
-            {
-                if (position.X < 0) result = false;
-                if (position.X > this.MapWidth) result = false;
-                if (position.Y < 0) result = false;
-                if (position.Y > this.MapHeight) result = false;
-            }
-            return result;
-        }
         private void Spin(object threadArguments)
         {
             var continueSpinning = false;
-            lock (this.ThreadLock) { continueSpinning = !this.StopRequested; }
+            lock (this.ThreadKey) { continueSpinning = !this.StopRequested; }
 
             while (continueSpinning)
             {
-                lock (this.ThreadLock)
+                lock (this.ThreadKey)
                 {
-                    foreach (var dot in this.Dots)
-                    {
-                        var usable = new List<Position>();
-                        foreach (var adjacent in dot.Position.Adjacent)
-                        {
-                            if (this.InBounds(adjacent)) usable.Add(adjacent);
-                        }
-                        if (usable.Count > 0) this.MoveDotTo(dot, usable[this.Rng.Next(usable.Count)]);
-                    }
                     continueSpinning = !this.StopRequested;
+
+                    foreach (var empire in this.Empires)
+                    {
+                        this.TakeTurn(empire);
+                    }
                 }
 
-                Thread.Sleep(0);
+                Thread.Sleep(1);
             }
         }
 
-        public List<KeyValuePair<Position, int>> GetRenderChanges()
+        private void TakeTurn(Empire empire)
         {
-            List<KeyValuePair<Position, int>> result;
-
-            lock (this.ThreadLock)
+            this.GenerateResources(empire);
+            foreach (var dot in empire.Dots)
             {
-                result = this.ChangesSinceLastRender.ToList();
-                this.ChangesSinceLastRender.Clear();
+                this.TakeTurn(dot);
             }
-
-            return result;
         }
+        private void TakeTurn(Dot dot)
+        {
+        }
+        private void GenerateResources(Empire empire)
+        {
+            empire.LastResourceIncome = empire.CurrentResourceIncome;
+            empire.CurrentResourceIncome = empire.Tiles.Count;
+            if (empire.Dots.Count > 0)
+            {
+                var dotList = empire.Dots.ToList();
+                for (int i = 0; i < empire.CurrentResourceIncome; i++)
+                {
+                    var dot = dotList[this.Rng.Next(dotList.Count)];
+                    dot.StoredResources += 1;
+                }
+            }
+        }
+
         public void Stop()
         {
-            lock (this.ThreadLock)
+            lock (this.ThreadKey)
             {
                 this.StopRequested = true;
             }
@@ -325,13 +378,25 @@ namespace Dots
         {
             if (!this.IsEngineRunning)
             {
-                lock (this.ThreadLock)
+                lock (this.ThreadKey)
                 {
                     this.StopRequested = false;
                     this.isEngineRunning = true;
                     ThreadPool.QueueUserWorkItem(this.Spin);
                 }
             }
+        }
+        public List<TileRenderer> GetRenderer()
+        {
+            List<TileRenderer> result;
+
+            lock (this.ThreadKey)
+            {
+                result = this.Renderer.Values.ToList();
+                this.Renderer.Clear();
+            }
+
+            return result;
         }
     }
 }

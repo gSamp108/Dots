@@ -25,15 +25,15 @@ namespace Dots
         private void InitializeEngine()
         {
             if (this.engine != null) this.engine.Stop();
-            this.engine = new Engine(1000, this.ClientRectangle.Width, this.ClientRectangle.Height);
+            this.engine = new Engine(10, this.ClientRectangle.Width, this.ClientRectangle.Height);
             this.engine.Start();
         }
 
         protected override void OnResizeEnd(EventArgs e)
         {
             base.OnResizeEnd(e);
-            this.InitializeCanvas();
-            this.InitializeEngine();
+            //this.InitializeCanvas();
+           // this.InitializeEngine();
         }
 
         private void InitializeCanvas()
@@ -52,11 +52,11 @@ namespace Dots
             {
                 using (var brush = new SolidBrush(Color.Black))
                 {
-                    var changes = this.engine.GetRenderChanges();
+                    var changes = this.engine.GetRenderer();
                     foreach (var change in changes)
                     {
-                        brush.Color = this.GetColor(change.Value);
-                        render.FillRectangle(brush, new Rectangle(change.Key.X, change.Key.Y, 2, 2));
+                        brush.Color = this.GetColor(change.Owner);
+                        render.FillRectangle(brush, new Rectangle(change.Position.X, change.Position.Y, 2, 2));
                     }
                 }
             }
