@@ -85,12 +85,33 @@ namespace Dots
             public DotTypes Type { get; set; }
 
             public int Tier { get; set; }
-            public int TierProgress { get; set; }
+            private int tierProgress;
+            public int TierProgress
+            {
+                get { return this.tierProgress; }
+                set
+                {
+                    this.tierProgress = value;
+                    if (this.tierProgress >= this.TierProgressRequired)
+                    {
+                        this.tierProgress -= this.TierProgressRequired;
+                        this.Tier += 1;
+                        this.Strength += this.Engine.Rng.Next(4);
+                        this.Strike += this.Engine.Rng.Next(4);
+                        this.Dodge += this.Engine.Rng.Next(4);
+                        this.Hits = this.MaxHits;
+                    }
+                }
+            }
             public int TierProgressRequired { get { return this.Tier * Engine.TierProgressCost; } }
             public int Hits { get; set; }
             public int MaxHits { get { return this.Tier * Engine.BaseHitsPerTier; } }
             public int StoredResources { get; set; }
             public Dot UnitStorage { get; set; }
+            public int Strength { get; set; }
+            public int Strike { get; set; }
+            public int Dodge { get; set; }
+            public int Range { get; set; }
 
             public int ControlRange
             {
@@ -108,6 +129,10 @@ namespace Dots
                 this.Type = type;
                 this.Tier = 1;
                 this.Hits = this.MaxHits;
+                this.Strength = 1;
+                this.Strike = 1;
+                this.Dodge = 1;
+                this.Range = 2;
             }
         }
 
@@ -228,10 +253,14 @@ namespace Dots
         }
         private void AddDot(Empire empire, Tile tile, DotTypes type)
         {
-            var dot = new Dot(this, empire, type);            
-            this.Dots.Add(dot);
-            empire.Dots.Add(dot);
+            var dot = new Dot(this, empire, type);
+            this.AddDot(dot);
             this.MoveDotTo(dot, tile);
+        }
+        private void AddDot(Dot dot)
+        {
+            this.Dots.Add(dot);
+            dot.Empire.Dots.Add(dot);
         }
         private void Initialize(int mapWidth, int mapHeight)
         {
@@ -329,6 +358,32 @@ namespace Dots
             tile.Claimants.Add(dot);
             this.ResolveTileClaim(tile);
         }
+        private void NegitiveUnitActionOnTile(Dot unit, Tile tile)
+        {
+            if (tile.Occupant != null)
+            {
+                var offense = unit;
+                var defense = tile.Occupant;
+                var strikePool = offense.Strike + defense.Dodge;
+                var strikeRoll = this.Rng.Next(strikePool) + 1;
+                if (strikeRoll > defense.Dodge)
+                {
+                    var damageRoll = this.Rng.Next(offense.Strength + 1) + this.Rng.Next(offense.Strength + 1);
+                    defense.Hits -= damageRoll;
+                    if (defense.Hits < 1)
+                    {
+                        offense.TierProgress += defense.Tier + this.Rng.Next(defense.Tier + 1);
+                        this.RemoveDot(defense);
+                    }
+                }
+            }
+        }
+        private void RemoveDot(Dot dot)
+        {
+            this.RemoveDotFromCurrentTile(dot);
+            dot.Empire.Dots.Remove(dot);
+            this.Dots.Remove(dot);
+        }
 
         private void Spin(object threadArguments)
         {
@@ -361,7 +416,18 @@ namespace Dots
 
         private void EmptyStorage(Empire empire)
         {
-
+            foreach (var city in empire.Dots.Where(o => o.Type == DotTypes.City && o.UnitStorage != null).ToList())
+            {
+                var emptyNearbyTiles = city.Tile.Position.Nearby.Select(o => this.GetTileAt(o)).Where(o => o.Occupant == null).ToList();
+                if (emptyNearbyTiles.Count > 0)
+                {
+                    var selectedTile = emptyNearbyTiles[this.Rng.Next(emptyNearbyTiles.Count)];
+                    var dot = city.UnitStorage;
+                    city.UnitStorage = null;
+                    this.AddDot(dot);
+                    this.MoveDotTo(dot, selectedTile);
+                }
+            }
         }
         private void MoveUnits(Empire empire)
         {
@@ -369,8 +435,32 @@ namespace Dots
             foreach (var unit in units)
             {
                 var nearbyTiles = unit.Tile.Position.Nearby.Select(o => this.GetTileAt(o));
-                var emptyTiles = nearbyTiles.Where(o => o.Occupant == null);
+                var uncontrolledTiles = nearbyTiles.Where(o => o.Claimants.Where(p => p.Empire != empire).Count() == 0);
+                var emptyUncontrolledTiles = uncontrolledTiles.Where(o => o.Occupant == null);
+                var enemyControlledTiles = nearbyTiles.Where(o => o.Claimants.Where(p => p.Empire != empire).Count() > 0);
+                var inEnemyControlledTile = enemyControlledTiles.Contains(unit.Tile);
 
+                var nearbyEnemyUnits = nearbyTiles.Where(o => o.Occupant != null && o.Occupant.Empire != empire).ToList();
+                var reachableEnemyUnits = unit.Tile.Position.Inrange(unit.Range).Select(o => this.GetTileAt(o)).Where(o => o.Occupant != null && o.Occupant.Empire != unit.Empire).ToList();
+                var moveableTiles = new List<Tile>();
+                moveableTiles.AddRange(emptyUncontrolledTiles);
+                if (!inEnemyControlledTile) moveableTiles.AddRange(enemyControlledTiles);
+
+                if (nearbyEnemyUnits.Count() > 0)
+                {
+                    var actionTile = nearbyEnemyUnits[this.Rng.Next(nearbyEnemyUnits.Count)];
+                    this.NegitiveUnitActionOnTile(unit, actionTile);
+                }
+                else if (reachableEnemyUnits.Count() > 0)
+                {
+                    var actionTile = reachableEnemyUnits[this.Rng.Next(reachableEnemyUnits.Count)];
+                    this.NegitiveUnitActionOnTile(unit, actionTile);
+                }
+                else if (moveableTiles.Count > 0)
+                {
+                    var actionTile = moveableTiles[this.Rng.Next(moveableTiles.Count)];
+                    this.MoveDotTo(unit, actionTile);
+                }
             }
         }
         private void ManageProduction(Empire empire)

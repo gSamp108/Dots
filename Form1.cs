@@ -25,7 +25,7 @@ namespace Dots
         private void InitializeEngine()
         {
             if (this.engine != null) this.engine.Stop();
-            this.engine = new Engine(10, this.ClientRectangle.Width, this.ClientRectangle.Height);
+            this.engine = new Engine(4, 20, 20);
             this.engine.Start();
         }
 
@@ -56,7 +56,14 @@ namespace Dots
                     foreach (var change in changes)
                     {
                         brush.Color = this.GetColor(change.Owner);
-                        render.FillRectangle(brush, new Rectangle(change.Position.X, change.Position.Y, 2, 2));
+                        render.FillRectangle(brush, new Rectangle(change.Position.X * 8, change.Position.Y * 8, 8, 8));
+                        if (change.Dot > 0)
+                        {
+                            brush.Color = this.GetColor(change.Dot);
+                            render.FillRectangle(brush, new Rectangle((change.Position.X * 8) + 2, (change.Position.Y * 8) + 2, 4, 4));
+                            render.DrawRectangle(Pens.Black, new Rectangle((change.Position.X * 8) + 2, (change.Position.Y * 8) + 2, 4, 4));
+                        }
+                        render.DrawRectangle(Pens.Black, new Rectangle(change.Position.X * 8, change.Position.Y * 8, 8, 8));
                     }
                 }
             }
