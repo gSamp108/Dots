@@ -184,6 +184,14 @@ namespace Dots
             }
         }
 
+        public sealed class TileActivity
+        {
+            public enum TileActivityTypes { None, Move, Strike, TierUp }
+            public TileActivityTypes Type { get; set; }
+            public Tile From { get; set; }
+            public Tile To { get; set; }
+        }
+
         private object ThreadKey = new object();
         private bool StopRequested;
         private bool isEngineRunning;
@@ -194,6 +202,7 @@ namespace Dots
         private int MapHeight;
         private Random Rng;
         private Dictionary<Tile, TileRenderer> Renderer;
+        private List<TileActivity> Activities;
 
         public const int UnitResourceCost = 10;
         public const int CityResourceCost = 10;
@@ -221,6 +230,16 @@ namespace Dots
             {
                 this.Initialize(mapWidth, mapHeight);
                 this.SpawnInitialEmpires(startingCount);
+            }
+        }
+        public void Tick()
+        {
+            lock (this.ThreadKey)
+            {
+                foreach (var empire in this.Empires)
+                {
+                    this.TakeTurn(empire);
+                }
             }
         }
 
@@ -271,6 +290,7 @@ namespace Dots
             this.MapWidth = mapWidth;
             this.Rng = new Random();
             this.Renderer = new Dictionary<Tile, TileRenderer>();
+            this.Activities = new List<TileActivity>();
         }
         private Tile GetTileAt(Position position)
         {
@@ -288,8 +308,17 @@ namespace Dots
         }
         private void MoveDotTo(Dot dot, Tile tile)
         {
+            this.LogMoveActivity(dot.Tile, tile);
             this.RemoveDotFromCurrentTile(dot);
             this.AddDotToTile(dot, tile);
+        }
+        private void LogMoveActivity(Tile from, Tile to)
+        {
+            var activity = new TileActivity();
+            activity.From = from;
+            activity.To = to;
+            activity.Type = TileActivity.TileActivityTypes.Move;
+            this.Activities.Add(activity);
         }
         private void AddDotToTile(Dot dot, Tile tile)
         {
@@ -362,6 +391,12 @@ namespace Dots
         {
             if (tile.Occupant != null)
             {
+                var activity = new TileActivity();
+                activity.From = unit.Tile;
+                activity.To = tile.Occupant.Tile;
+                activity.Type = TileActivity.TileActivityTypes.Strike;
+                this.Activities.Add(activity);
+
                 var offense = unit;
                 var defense = tile.Occupant;
                 var strikePool = offense.Strike + defense.Dodge;
@@ -396,16 +431,12 @@ namespace Dots
                 {
                     continueSpinning = !this.StopRequested;
 
-                    foreach (var empire in this.Empires)
-                    {
-                        this.TakeTurn(empire);
-                    }
+                    this.Tick();
                 }
 
                 Thread.Sleep(1);
             }
         }
-
         private void TakeTurn(Empire empire)
         {
             this.GenerateResources(empire);
