@@ -8,201 +8,20 @@ namespace Dots
 {
     public sealed class Engine
     {
-        public struct Position
-        {
-            public int X;
-            public int Y;
-            public Position(int x, int y)
-            {
-                this.X = x;
-                this.Y = y;
-            }
-            public override bool Equals(object obj)
-            {
-                return obj is Position && ((Position)obj).X == this.X && ((Position)obj).Y == this.Y;
-            }
-            public override int GetHashCode()
-            {
-                var hash = 31;
-                unchecked
-                {
-                    hash *= this.X * 27;
-                    hash *= this.Y * 27;
-                }
-                return hash;
-            }
-            public override string ToString()
-            {
-                return "(" + this.X.ToString() + ", " + this.Y.ToString() + ")";
-            }
-            public IEnumerable<Position> Adjacent
-            {
-                get
-                {
-                    yield return new Position(this.X + 1, this.Y + 1);
-                    yield return new Position(this.X + 1, this.Y - 1);
-                    yield return new Position(this.X - 1, this.Y + 1);
-                    yield return new Position(this.X - 1, this.Y - 1);
-                }
-            }
-            public IEnumerable<Position> Nearby
-            {
-                get
-                {
-                    for (int x = -1; x <= 1; x++)
-                    {
-                        for (int y = -1; y <= 1; y++)
-                        {
-                            if (x != 0 || y != 0) yield return new Position(this.X + x, this.Y + y);
-                        }
-                    }
-                }
-            }
-            public IEnumerable<Position> Inrange(int distance)
-            {
-                for (int x = -distance; x <= distance; x++)
-                {
-                    for (int y = -distance; y <= distance; y++)
-                    {
-                        var scanPosition = new Position(this.X + x, this.Y + y);
-                        if (this.Distance(scanPosition) <= distance) yield return scanPosition;
-                    }
-                }
-            }
-            public double Distance(Position position)
-            {
-                return Math.Sqrt(Math.Pow(((double)position.X - (double)this.X), 2) + Math.Pow(((double)position.Y - (double)this.Y), 2));
-            }
-        }
-
-        public enum DotTypes { City, Unit }
-
-        public sealed class Dot
-        {
-            public Engine Engine { get; set; }
-            public Tile Tile { get; set; }
-            public Empire Empire { get; set; }
-            public DotTypes Type { get; set; }
-
-            public int Tier { get; set; }
-            private int tierProgress;
-            public int TierProgress
-            {
-                get { return this.tierProgress; }
-                set
-                {
-                    this.tierProgress = value;
-                    if (this.tierProgress >= this.TierProgressRequired)
-                    {
-                        this.tierProgress -= this.TierProgressRequired;
-                        this.Tier += 1;
-                        this.Strength += this.Engine.Rng.Next(4);
-                        this.Strike += this.Engine.Rng.Next(4);
-                        this.Dodge += this.Engine.Rng.Next(4);
-                        this.Hits = this.MaxHits;
-                    }
-                }
-            }
-            public int TierProgressRequired { get { return this.Tier * Engine.TierProgressCost; } }
-            public int Hits { get; set; }
-            public int MaxHits { get { return this.Tier * Engine.BaseHitsPerTier; } }
-            public int StoredResources { get; set; }
-            public Dot UnitStorage { get; set; }
-            public int Strength { get; set; }
-            public int Strike { get; set; }
-            public int Dodge { get; set; }
-            public int Range { get; set; }
-
-            public int ControlRange
-            {
-                get
-                {
-                    if (this.Type == DotTypes.City) return Engine.BaseCityControlRange;
-                    else return Engine.BaseUnitControlRange;
-                }
-            }
-
-            public Dot(Engine engine, Empire empire, DotTypes type)
-            {
-                this.Engine = engine;
-                this.Empire = empire;
-                this.Type = type;
-                this.Tier = 1;
-                this.Hits = this.MaxHits;
-                this.Strength = 1;
-                this.Strike = 1;
-                this.Dodge = 1;
-                this.Range = 2;
-            }
-        }
-
-        public sealed class Empire
-        {
-            public Engine Engine { get; set; }
-            public int Id { get; set; }
-            public HashSet<Dot> Dots { get; set; }
-            public HashSet<Tile> Tiles { get; set; }
-
-            public int LastResourceIncome { get; set; }
-            public int CurrentResourceIncome { get; set; }
-            public int CurrentResourceStorage { get; set; }
-   
-            public Empire(Engine engine, int id)
-            {
-                this.Engine = engine;
-                this.Id = id;
-                this.Dots = new HashSet<Dot>();
-                this.Tiles = new HashSet<Tile>();
-            }
-        }
-
-        public sealed class Tile
-        {
-            public Engine Engine { get; set; }
-            public Position Position { get; set; }
-            public Empire Owner { get; set; }
-            public HashSet<Dot> Claimants { get; set; }
-            public Dot Occupant { get; set; }
-
-            public Tile(Engine engine, Position position)
-            {
-                this.Engine = engine;
-                this.Position = position;
-                this.Claimants = new HashSet<Dot>();
-            }
-        }
-
-        public sealed class TileRenderer
-        {
-            public Position Position { get; set; }
-            public int Owner { get; set; }
-            public int Dot { get; set; }
-
-            public TileRenderer(Position position)
-            {
-                this.Position = position;
-            }
-        }
-
-        public sealed class TileActivity
-        {
-            public enum TileActivityTypes { None, Move, Strike, TierUp }
-            public TileActivityTypes Type { get; set; }
-            public Tile From { get; set; }
-            public Tile To { get; set; }
-        }
-
         private object ThreadKey = new object();
         private bool StopRequested;
         private bool isEngineRunning;
         private HashSet<Dot> Dots;
-        private HashSet<Empire> Empires;
+        private int GroupIndex;
+        private Dictionary<int, Group> Groups;
         private Dictionary<Position, Tile> Tiles;
         private int MapWidth;
         private int MapHeight;
         private Random Rng;
         private Dictionary<Tile, TileRenderer> Renderer;
         private List<TileActivity> Activities;
+        private int CurrentTick;
+        private int CurrentTickGroupId;
 
         public const int UnitResourceCost = 10;
         public const int CityResourceCost = 10;
@@ -229,21 +48,65 @@ namespace Dots
             lock (this.ThreadKey)
             {
                 this.Initialize(mapWidth, mapHeight);
-                this.SpawnInitialEmpires(startingCount);
+                this.SpawnInitialGroups(startingCount);
             }
         }
         public void Tick()
         {
             lock (this.ThreadKey)
             {
-                foreach (var empire in this.Empires)
+                if (this.Groups.Count > 0)
                 {
-                    this.TakeTurn(empire);
+                    var selectedGroup = default(Group);
+                    while (selectedGroup == null)
+                    {
+                        if (this.Groups.ContainsKey(this.CurrentTickGroupId)) selectedGroup = this.Groups[this.CurrentTickGroupId];
+                        else if (this.CurrentTickGroupId >= this.GroupIndex) this.AdvanceTickCount();
+                        else this.CurrentTickGroupId += 1;
+                    }
+                    selectedGroup.Tick();
                 }
             }
         }
 
-        private void SpawnInitialEmpires(int startingCount)
+        private void AdvanceTickCount()
+        {
+            this.CurrentTick += 1;
+            this.CurrentTickGroupId = 0;
+            this.GenerateResources();
+            this.RegenerateDots();
+        }
+
+        private void RegenerateDots()
+        {
+            foreach (var dot in this.Dots)
+            {
+                dot.RestoreMovement();
+            }
+        }
+        private void GenerateResources()
+        {
+            foreach (var group in this.Groups.Values)
+            {
+                group.LastResourceIncome = group.CurrentResourceIncome;
+                group.CurrentResourceIncome = group.Tiles.Count;
+                group.CurrentResourceStorage += group.CurrentResourceIncome;
+            }
+        }
+
+        private void Initialize(int mapWidth, int mapHeight)
+        {
+            this.Dots = new HashSet<Dot>();
+            this.GroupIndex = 0;
+            this.Groups = new Dictionary<int, Group>();
+            this.Tiles = new Dictionary<Position, Tile>();
+            this.MapHeight = mapHeight;
+            this.MapWidth = mapWidth;
+            this.Rng = new Random();
+            this.Renderer = new Dictionary<Tile, TileRenderer>();
+            this.Activities = new List<TileActivity>();
+        }
+        private void SpawnInitialGroups(int startingCount)
         {
             var spawnPoints = new HashSet<Position>();
             for (int x = 0; x < this.MapWidth; x++)
@@ -265,12 +128,18 @@ namespace Dots
                     spawnPoints.Remove(point);
                 }
 
-                var empire = new Empire(this, i + 1);
-                this.AddEmpire(empire);
-                this.AddDot(empire, this.GetTileAt(spawnPoint), DotTypes.City);
+                this.SpawnNewGroup(spawnPoint);
             }
         }
-        private void AddDot(Empire empire, Tile tile, DotTypes type)
+
+        private void SpawnNewGroup(Position position)
+        {
+            var group = new Group(this, this.GroupIndex);
+            this.Groups.Add(group.Id, group);
+            this.GroupIndex += 1;
+            this.AddDot(group, this.GetTileAt(position), DotTypes.City);
+        }
+        private void AddDot(Group empire, Tile tile, DotTypes type)
         {
             var dot = new Dot(this, empire, type);
             this.AddDot(dot);
@@ -279,18 +148,7 @@ namespace Dots
         private void AddDot(Dot dot)
         {
             this.Dots.Add(dot);
-            dot.Empire.Dots.Add(dot);
-        }
-        private void Initialize(int mapWidth, int mapHeight)
-        {
-            this.Dots = new HashSet<Dot>();
-            this.Empires = new HashSet<Empire>();
-            this.Tiles = new Dictionary<Position, Tile>();
-            this.MapHeight = mapHeight;
-            this.MapWidth = mapWidth;
-            this.Rng = new Random();
-            this.Renderer = new Dictionary<Tile, TileRenderer>();
-            this.Activities = new List<TileActivity>();
+            dot.Group.Dots.Add(dot);
         }
         private Tile GetTileAt(Position position)
         {
@@ -301,10 +159,6 @@ namespace Dots
             while (x >= this.MapWidth) { x -= this.MapWidth; }
             while (y >= this.MapHeight) { y -= this.MapHeight; }
             return this.Tiles[new Position(x, y)];
-        }
-        private void AddEmpire(Empire empire)
-        {
-            this.Empires.Add(empire);
         }
         private void MoveDotTo(Dot dot, Tile tile)
         {
@@ -325,7 +179,7 @@ namespace Dots
             dot.Tile = tile;
             tile.Occupant = dot;
             this.InitializeTileRenderer(tile);
-            this.Renderer[tile].Dot = dot.Empire.Id;
+            this.Renderer[tile].Dot = dot.Group.Id;
             foreach (var position in tile.Position.Inrange(dot.ControlRange))
             {
                 var nearbyTile = this.GetTileAt(position);
@@ -353,7 +207,7 @@ namespace Dots
             {
                 this.Renderer.Add(tile, new TileRenderer(tile.Position));
                 this.Renderer[tile].Owner = (tile.Owner != null ? tile.Owner.Id : 0);
-                this.Renderer[tile].Dot = (tile.Occupant != null ? tile.Occupant.Empire.Id : 0);
+                this.Renderer[tile].Dot = (tile.Occupant != null ? tile.Occupant.Group.Id : 0);
             }            
         }
         private void RemoveTileClaim(Tile tile, Dot dot)
@@ -363,7 +217,7 @@ namespace Dots
         }
         private void ResolveTileClaim(Tile tile)
         {
-            var remainingClaimingEmpires = tile.Claimants.Select(o => o.Empire).Distinct();
+            var remainingClaimingEmpires = tile.Claimants.Select(o => o.Group).Distinct();
             if (remainingClaimingEmpires.Count() > 0)
             {
                 if (!remainingClaimingEmpires.Contains(tile.Owner))
@@ -416,7 +270,7 @@ namespace Dots
         private void RemoveDot(Dot dot)
         {
             this.RemoveDotFromCurrentTile(dot);
-            dot.Empire.Dots.Remove(dot);
+            dot.Group.Dots.Remove(dot);
             this.Dots.Remove(dot);
         }
 
@@ -437,15 +291,14 @@ namespace Dots
                 Thread.Sleep(1);
             }
         }
-        private void TakeTurn(Empire empire)
+        private void TakeTurn(Group empire)
         {
-            this.GenerateResources(empire);
             this.ManageProduction(empire);
             this.MoveUnits(empire);
             this.EmptyStorage(empire);
         }
 
-        private void EmptyStorage(Empire empire)
+        private void EmptyStorage(Group empire)
         {
             foreach (var city in empire.Dots.Where(o => o.Type == DotTypes.City && o.UnitStorage != null).ToList())
             {
@@ -460,19 +313,19 @@ namespace Dots
                 }
             }
         }
-        private void MoveUnits(Empire empire)
+        private void MoveUnits(Group empire)
         {
             var units = empire.Dots.Where(o => o.Type == DotTypes.Unit);
             foreach (var unit in units)
             {
                 var nearbyTiles = unit.Tile.Position.Nearby.Select(o => this.GetTileAt(o));
-                var uncontrolledTiles = nearbyTiles.Where(o => o.Claimants.Where(p => p.Empire != empire).Count() == 0);
+                var uncontrolledTiles = nearbyTiles.Where(o => o.Claimants.Where(p => p.Group != empire).Count() == 0);
                 var emptyUncontrolledTiles = uncontrolledTiles.Where(o => o.Occupant == null);
-                var enemyControlledTiles = nearbyTiles.Where(o => o.Claimants.Where(p => p.Empire != empire).Count() > 0);
+                var enemyControlledTiles = nearbyTiles.Where(o => o.Claimants.Where(p => p.Group != empire).Count() > 0);
                 var inEnemyControlledTile = enemyControlledTiles.Contains(unit.Tile);
 
-                var nearbyEnemyUnits = nearbyTiles.Where(o => o.Occupant != null && o.Occupant.Empire != empire).ToList();
-                var reachableEnemyUnits = unit.Tile.Position.Inrange(unit.Range).Select(o => this.GetTileAt(o)).Where(o => o.Occupant != null && o.Occupant.Empire != unit.Empire).ToList();
+                var nearbyEnemyUnits = nearbyTiles.Where(o => o.Occupant != null && o.Occupant.Group != empire).ToList();
+                var reachableEnemyUnits = unit.Tile.Position.Inrange(unit.Range).Select(o => this.GetTileAt(o)).Where(o => o.Occupant != null && o.Occupant.Group != unit.Group).ToList();
                 var moveableTiles = new List<Tile>();
                 moveableTiles.AddRange(emptyUncontrolledTiles);
                 if (!inEnemyControlledTile) moveableTiles.AddRange(enemyControlledTiles);
@@ -494,7 +347,7 @@ namespace Dots
                 }
             }
         }
-        private void ManageProduction(Empire empire)
+        private void ManageProduction(Group empire)
         {
             var citiesWithoutUnitInStorage = empire.Dots.Where(o => o.Type == DotTypes.City && o.UnitStorage == null).ToList();
             while (empire.CurrentResourceStorage >= Engine.UnitResourceCost && citiesWithoutUnitInStorage.Count > 0)
@@ -504,12 +357,6 @@ namespace Dots
                 empire.CurrentResourceStorage -= Engine.UnitResourceCost;
                 city.UnitStorage = new Dot(this, empire, DotTypes.Unit);
             }            
-        }
-        private void GenerateResources(Empire empire)
-        {
-            empire.LastResourceIncome = empire.CurrentResourceIncome;
-            empire.CurrentResourceIncome = empire.Tiles.Count;
-            empire.CurrentResourceStorage += empire.CurrentResourceIncome;
         }
 
         public void Stop()
@@ -541,6 +388,15 @@ namespace Dots
                 this.Renderer.Clear();
             }
 
+            return result;
+        }
+        public int Random(int input)
+        {
+            var result = 0;
+            lock (this.ThreadKey)
+            {
+                result = this.Rng.Next(input);
+            }
             return result;
         }
     }
